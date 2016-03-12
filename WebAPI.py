@@ -11,8 +11,8 @@ import time
 # Import Live libraries
 import Live
 import types
-from _Framework.ControlSurface import ControlSurface
-
+# from _Framework.ControlSurface import ControlSurface
+from ableton.v2.control_surface import ControlSurface
 
 PUSH_ADDRESS = "tcp://127.0.0.1:5554"
 PULL_ADDRESS = "tcp://127.0.0.1:5553"
@@ -20,6 +20,9 @@ PUB_ADDRESS = "tcp://127.0.0.1:5552"
 
 
 class WebAPI(ControlSurface):
+    __module__ == __name__
+    __doc__ == "WebAPI"
+
     @property
     def application(self):
         if not hasattr(self, "_application"):
@@ -31,7 +34,6 @@ class WebAPI(ControlSurface):
         if not hasattr(self, "_document"):
             self._document = self.application.get_document()
         return self._document
-
 
     def get_object(self, path):
         obj = self
@@ -73,7 +75,36 @@ class WebAPI(ControlSurface):
 
     rconsole_started = False
 
+    def build_midi_map(self, script_handle, midi_map_handle):
+        """Live -> Script
+        Build DeviceParameter Mappings, that are processed in Audio time, or
+        forward MIDI messages explicitly to our receive_midi_functions.
+        Which means that when you are not forwarding MIDI, nor mapping parameters, you will
+        never get any MIDI messages at all.
+        """
+#        script_handle = self.__c_instance.handle()
+#        for channel in range(4):
+        self._logger.debug("build_midi_map")
+#        Live.MidiMap.forward_midi_note(script_handle, midi_map_handle, 1, 60)
+        ControlSurface.build_midi_map(self, script_handle, midi_map_handle)
+
     def receive_midi(self, midi_bytes):
+        self._logger.debug("receive_midi")
+        try:
+            if len(midi_bytes) == 2:
+                while True:
+                    try:
+                        req = self.pull_socket.recv()
+                        self.log_message(req)
+                    except zmq.ZMQError:
+                        break
+                    self.respond(simplejson.loads(req), self.push_socket.send)
+        except Exception, e:
+            self.log_message(repr(e))
+    def handle_sysex(self, midi_bytes):
+        self._logger.debug("handle_sysex")
+
+    def process_midi_bytes (self, midi_bytes, midi_processor):
         try:
             if len(midi_bytes) == 2:
                 while True:
@@ -275,15 +306,24 @@ class WebAPI(ControlSurface):
     def unpause(self):
         self.console_lock.set()
 
-    def __init__(self, c_instance):
+    def __init__(self, *a, **k):
+        super(WebAPI, self).__init__(*a, **k)
+
+        # initialize logging
         logfile = logging.FileHandler('/tmp/abletonwebapi.log')
         logfile.setLevel(logging.DEBUG)
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         logfile.setFormatter(formatter)
-        self.logger = logging.getLogger("ableton")
-        self.logger.setLevel(logging.DEBUG)
-        self.logger.addHandler(logfile)
-        self.logger.debug("WebAPI connected")
+
+        self._logger = logging.getLogger("ableton")
+        self._logger.setLevel(logging.DEBUG)
+        self._logger.addHandler(logfile)
+        self._logger.debug("WebAPI starting.")
+
+
+        with self.component_guard():
+            self._suppress_sysex = False
+#        self.show_message('Initializing WebAPI')
 
         self.listeners = {}
 
@@ -308,14 +348,17 @@ class WebAPI(ControlSurface):
             self.pub_socket = self.context.socket(zmq.PUB)
             self.pub_socket.setsockopt(zmq.LINGER, 10)
             self.pub_socket.bind(PUB_ADDRESS)
-
+            self._logger.debug("WebAPI listening...")
         except Exception, e:
+            self._logger.debug("ZMQ Exception.")
             self.log_message(e)
 
-        ControlSurface.__init__(self, c_instance)
+        self._logger.debug('WebAPI Loaded.')
+        self.show_message('WebAPI Loaded.')
+
 
     def log_message(self, *message):
-        self.logger.exception(str(message))
+        self._logger.exception(str(message))
 
     def disconnect(self):
         self.console_lock.set()
